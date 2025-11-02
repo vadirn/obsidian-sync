@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  couchdb:
+    build: .
+    container_name: obsidian-couchdb
+    ports:
+      - "5984:5984"
+    volumes:
+      - couchdb_data:/opt/couchdb/data
+    environment:
+      - COUCHDB_USER=${COUCHDB_USER:-admin}
+      - COUCHDB_PASSWORD=${COUCHDB_PASSWORD:-changeme}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5984"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  wireguard:
+    image: linuxserver/wireguard:latest
+    container_name: wireguard
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ:-UTC}
+      - SERVERURL=${VPS_IP:-localhost}
+      - SERVERPORT=51820
+      - PEERS=${WIREGUARD_PEERS:-3}
+      - PEERDNS=8.8.8.8,8.8.4.4
+      - ALLOWEDIPS=0.0.0.0/0
+    ports:
+      - "51820:51820/udp"
+    volumes:
+      - wireguard_config:/config
+      - /lib/modules:/lib/modules:ro
+    restart: unless-stopped
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv4.ip_forward=1
+
+  caddy:
+    image: caddy:latest
+    container_name: caddy-reverse-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    environment:
+      - VPS_DOMAIN=${VPS_DOMAIN:-localhost}
+    depends_on:
+      - couchdb
+    restart: unless-stopped
+
+volumes:
+  couchdb_data:
+    driver: local
+  wireguard_config:
+    driver: local
+  caddy_data:
+    driver: local
