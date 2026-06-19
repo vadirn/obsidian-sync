@@ -5,3 +5,10 @@
 localhost {
   reverse_proxy couchdb:5984
 }
+
+# --- ADDITIVE: consult MCP route on the already-open 443 ---
+# {$MCP_DOMAIN} comes from the caddy service env (default mcp.localhost; set to
+# mcp.<yourdomain> on the VPS so Caddy auto-provisions TLS via Let's Encrypt).
+{$MCP_DOMAIN:mcp.localhost} {
+  reverse_proxy mcp:3000
+}

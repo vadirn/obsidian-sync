@@ -55,9 +55,48 @@ services:
       - caddy_data:/data
     environment:
       - VPS_DOMAIN=${VPS_DOMAIN:-localhost}
+      - MCP_DOMAIN=${MCP_DOMAIN:-mcp.localhost}
     depends_on:
       - couchdb
     restart: unless-stopped
+
+  # --- ADDITIVE: official Obsidian Sync headless pull-only sidecar ---
+  # Lands the vault as plaintext .md files in the shared vault_data volume.
+  obsidian-headless:
+    build:
+      context: ./mcp
+      dockerfile: obsidian-headless.Dockerfile
+    container_name: obsidian-headless
+    environment:
+      - OBSIDIAN_AUTH_TOKEN=${OBSIDIAN_AUTH_TOKEN:-}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - vault_data:/vault
+      - obsidian_config:/config
+    restart: unless-stopped
+
+  # --- ADDITIVE: read-only consult MCP server (vault-query + Fireworks synthesis) ---
+  mcp:
+    build:
+      context: ./mcp
+      dockerfile: Dockerfile
+    container_name: obsidian-mcp
+    environment:
+      - PORT=3000
+      - VAULT_ROOT=/vault
+      - MCP_AUTH_MODE=${MCP_AUTH_MODE:-bearer}
+      - MCP_BEARER_TOKEN=${MCP_BEARER_TOKEN:-}
+      - MCP_RESOURCE_URL=${MCP_RESOURCE_URL:-https://mcp.localhost/mcp}
+      - MCP_OAUTH_ISSUER=${MCP_OAUTH_ISSUER:-}
+      - FIREWORKS_API_KEY=${FIREWORKS_API_KEY:-}
+      - FIREWORKS_API_KEY_FILE=${FIREWORKS_API_KEY_FILE:-}
+      - FIREWORKS_MODEL=${FIREWORKS_MODEL:-accounts/fireworks/models/glm-5p2}
+    volumes:
+      - vault_data:/vault:ro # read-only: the MCP server never writes the vault
+    depends_on:
+      - obsidian-headless
+    restart: unless-stopped
+    # no published port: Caddy reaches it on the compose network as mcp:3000
 
 volumes:
   couchdb_data:
@@ -65,4 +104,8 @@ volumes:
   wireguard_config:
     driver: local
   caddy_data:
+    driver: local
+  vault_data:
+    driver: local
+  obsidian_config:
     driver: local
