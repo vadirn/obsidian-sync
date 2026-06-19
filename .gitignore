@@ -11,3 +11,5 @@ mcp/.vault-query-src/
 # Local test stub
 mcp/.env.local
 docker-compose.override.yml
+# Vault project link (absolute paths, per-device)
+.vault.config.json

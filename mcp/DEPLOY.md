@@ -42,12 +42,12 @@ doppler run -p claude-code -c std -- docker compose up -d
 doppler run -p claude-code -c std -- node dist/server.js
 ```
 
-| Key                   | Provisioned in `std`? | Purpose                                                          |
-| --------------------- | --------------------- | --------------------------------------------------------------- |
-| `FIREWORKS_API_KEY`   | yes                   | empty disables synthesis (returns `synthesis:null`)             |
-| `COUCHDB_PASSWORD`    | no — add or use `.env`| CouchDB admin password                                          |
-| `OBSIDIAN_AUTH_TOKEN` | no — add or use `.env`| dedicated Obsidian account token (account-scoped — keep secret) |
-| `MCP_BEARER_TOKEN`    | no — add or use `.env`| static token for `bearer` mode. Generate: `openssl rand -hex 32`|
+| Key                   | Provisioned in `std`?  | Purpose                                                          |
+| --------------------- | ---------------------- | ---------------------------------------------------------------- |
+| `FIREWORKS_API_KEY`   | yes                    | empty disables synthesis (returns `synthesis:null`)              |
+| `COUCHDB_PASSWORD`    | no — add or use `.env` | CouchDB admin password                                           |
+| `OBSIDIAN_AUTH_TOKEN` | no — add or use `.env` | dedicated Obsidian account token (account-scoped — keep secret)  |
+| `MCP_BEARER_TOKEN`    | no — add or use `.env` | static token for `bearer` mode. Generate: `openssl rand -hex 32` |
 
 Only `FIREWORKS_API_KEY` lives in Doppler today. Add the others before relying on
 the `doppler run` model for them: `doppler secrets set COUCHDB_PASSWORD -p claude-code -c std`
@@ -57,14 +57,14 @@ style) remains a third option, unused under the `doppler run` model.
 
 ### Non-secrets — `.env`
 
-| Key                    | Default                             | Purpose                                                                        |
-| ---------------------- | ----------------------------------- | ------------------------------------------------------------------------------ |
-| `MCP_AUTH_MODE`        | `bearer`                            | `none` (local only) \| `bearer` (static token) \| `oauth` (deploy, see below)  |
-| `MCP_RESOURCE_URL`     | `https://mcp.localhost/mcp`         | public MCP endpoint (OAuth token audience)                                     |
-| `MCP_OAUTH_ISSUER`     | origin of `MCP_RESOURCE_URL`        | OAuth AS issuer (`oauth` mode only)                                            |
-| `MCP_DOMAIN`           | `mcp.localhost`                     | subdomain Caddy serves the MCP route on                                        |
-| `FIREWORKS_MODEL`      | `accounts/fireworks/models/glm-5p2` | Fireworks model id                                                             |
-| `FIREWORKS_MAX_TOKENS` | `1024`                              | synthesis output cap                                                           |
+| Key                    | Default                             | Purpose                                                                       |
+| ---------------------- | ----------------------------------- | ----------------------------------------------------------------------------- |
+| `MCP_AUTH_MODE`        | `bearer`                            | `none` (local only) \| `bearer` (static token) \| `oauth` (deploy, see below) |
+| `MCP_RESOURCE_URL`     | `https://mcp.localhost/mcp`         | public MCP endpoint (OAuth token audience)                                    |
+| `MCP_OAUTH_ISSUER`     | origin of `MCP_RESOURCE_URL`        | OAuth AS issuer (`oauth` mode only)                                           |
+| `MCP_DOMAIN`           | `mcp.localhost`                     | subdomain Caddy serves the MCP route on                                       |
+| `FIREWORKS_MODEL`      | `accounts/fireworks/models/glm-5p2` | Fireworks model id                                                            |
+| `FIREWORKS_MAX_TOKENS` | `1024`                              | synthesis output cap                                                          |
 
 ## Local testing (macOS, docker compose)
 
