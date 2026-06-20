@@ -115,13 +115,11 @@ app.post("/mcp", authGuard, async (req: Request, res: Response) => {
     };
     await buildServer().connect(transport);
   } else if (!transport) {
-    res
-      .status(400)
-      .json({
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "Bad Request: no valid session ID" },
-        id: null,
-      });
+    res.status(400).json({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: "Bad Request: no valid session ID" },
+      id: null,
+    });
     return;
   }
 

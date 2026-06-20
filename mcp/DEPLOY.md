@@ -42,10 +42,10 @@ doppler run -p claude-code -c std -- docker compose up -d
 doppler run -p claude-code -c std -- node dist/server.js
 ```
 
-| Key                   | Provisioned in `std`?  | Purpose                                                          |
-| --------------------- | ---------------------- | ---------------------------------------------------------------- |
-| `FIREWORKS_API_KEY`   | yes                    | empty disables synthesis (returns `synthesis:null`)              |
-| `OBSIDIAN_AUTH_TOKEN` | no, add or use `.env` | dedicated Obsidian account token (account-scoped, keep secret)  |
+| Key                   | Provisioned in `std`? | Purpose                                                          |
+| --------------------- | --------------------- | ---------------------------------------------------------------- |
+| `FIREWORKS_API_KEY`   | yes                   | empty disables synthesis (returns `synthesis:null`)              |
+| `OBSIDIAN_AUTH_TOKEN` | no, add or use `.env` | dedicated Obsidian account token (account-scoped, keep secret)   |
 | `MCP_BEARER_TOKEN`    | no, add or use `.env` | static token for `bearer` mode. Generate: `openssl rand -hex 32` |
 
 Only `FIREWORKS_API_KEY` lives in Doppler today. Add the others before relying on

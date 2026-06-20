@@ -58,12 +58,16 @@ async function drill(p: DocPointer): Promise<Slice | null> {
     if (!address) return null;
     const u = await readSection(p.path, address);
     return { path: p.path, address: u.address, excerpt: trim(u.content) };
-  } catch {
+  } catch (e) {
     // address out of range / fragment: retry the pre-heading region once, else drop.
     try {
       const u = await readSection(p.path, "0");
       return { path: p.path, address: u.address, excerpt: trim(u.content) };
-    } catch {
+    } catch (e2) {
+      console.error(
+        `drill failed for ${p.path} (${p.section ?? "overview"}): ${(e as Error).message}; ` +
+          `fallback "0" also failed: ${(e2 as Error).message}`,
+      );
       return null;
     }
   }
@@ -94,10 +98,10 @@ export async function runConsult(
   if (ranked.length > MAX_DRILLED_POINTERS) {
     note = `drilled top ${MAX_DRILLED_POINTERS} of ${ranked.length} pointers`;
   }
-  for (const p of ranked.slice(0, MAX_DRILLED_POINTERS)) {
-    const s = await drill(p);
-    if (s) slices.push(s);
-  }
+  // Drills are independent single-file reads (no shared vault index), so run them
+  // concurrently; .map preserves coverage-rank order in the resulting slices.
+  const drilled = await Promise.all(ranked.slice(0, MAX_DRILLED_POINTERS).map(drill));
+  for (const s of drilled) if (s) slices.push(s);
 
   const synthesis = await synthesize(query, slices);
   return { synthesis, slices, abstained: false, note };
