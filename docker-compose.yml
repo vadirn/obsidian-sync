@@ -1,24 +1,6 @@
 version: '3.8'
 
 services:
-  couchdb:
-    build: .
-    container_name: obsidian-couchdb
-    ports:
-      - "5984:5984"
-    volumes:
-      - couchdb_data:/opt/couchdb/data
-    environment:
-      - COUCHDB_USER=${COUCHDB_USER:-admin}
-      - COUCHDB_PASSWORD=${COUCHDB_PASSWORD:-changeme}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5984"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
   wireguard:
     image: linuxserver/wireguard:latest
     container_name: wireguard
@@ -54,10 +36,9 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
     environment:
-      - VPS_DOMAIN=${VPS_DOMAIN:-localhost}
       - MCP_DOMAIN=${MCP_DOMAIN:-mcp.localhost}
     depends_on:
-      - couchdb
+      - mcp
     restart: unless-stopped
 
   # --- ADDITIVE: official Obsidian Sync headless pull-only sidecar ---
@@ -99,8 +80,6 @@ services:
     # no published port: Caddy reaches it on the compose network as mcp:3000
 
 volumes:
-  couchdb_data:
-    driver: local
   wireguard_config:
     driver: local
   caddy_data:

@@ -1,12 +1,4 @@
-# Caddy reverse proxy for Obsidian LiveSync
-# On VPS: Replace 'localhost' with your actual domain (e.g., couchdb.yourdomain.com)
-# Local testing: Use localhost
-
-localhost {
-  reverse_proxy couchdb:5984
-}
-
-# --- ADDITIVE: consult MCP route on the already-open 443 ---
+# Caddy reverse proxy for the consult MCP server.
 # {$MCP_DOMAIN} comes from the caddy service env (default mcp.localhost; set to
 # mcp.<yourdomain> on the VPS so Caddy auto-provisions TLS via Let's Encrypt).
 {$MCP_DOMAIN:mcp.localhost} {

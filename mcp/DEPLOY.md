@@ -45,12 +45,11 @@ doppler run -p claude-code -c std -- node dist/server.js
 | Key                   | Provisioned in `std`?  | Purpose                                                          |
 | --------------------- | ---------------------- | ---------------------------------------------------------------- |
 | `FIREWORKS_API_KEY`   | yes                    | empty disables synthesis (returns `synthesis:null`)              |
-| `COUCHDB_PASSWORD`    | no — add or use `.env` | CouchDB admin password                                           |
 | `OBSIDIAN_AUTH_TOKEN` | no — add or use `.env` | dedicated Obsidian account token (account-scoped — keep secret)  |
 | `MCP_BEARER_TOKEN`    | no — add or use `.env` | static token for `bearer` mode. Generate: `openssl rand -hex 32` |
 
 Only `FIREWORKS_API_KEY` lives in Doppler today. Add the others before relying on
-the `doppler run` model for them: `doppler secrets set COUCHDB_PASSWORD -p claude-code -c std`
+the `doppler run` model for them: `doppler secrets set OBSIDIAN_AUTH_TOKEN -p claude-code -c std`
 (interactive prompt, no value on the command line). Until then they fall back to
 `.env`. `FIREWORKS_API_KEY_FILE` (path to a file holding the key, Docker-secret
 style) remains a third option, unused under the `doppler run` model.
