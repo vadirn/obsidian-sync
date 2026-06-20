@@ -42,30 +42,69 @@ doppler run -p claude-code -c std -- docker compose up -d
 doppler run -p claude-code -c std -- node dist/server.js
 ```
 
-| Key                   | Provisioned in `std`? | Purpose                                                          |
-| --------------------- | --------------------- | ---------------------------------------------------------------- |
-| `FIREWORKS_API_KEY`   | yes                   | empty disables synthesis (returns `synthesis:null`)              |
-| `OBSIDIAN_AUTH_TOKEN` | no, `ob login` instead | only if injecting a token directly; `ob login` writes to the `obsidian_config` volume instead |
-| `MCP_BEARER_TOKEN`    | no, add or use `.env` | static token; works in `bearer` mode and as an escape hatch in `oauth` mode. Generate: `openssl rand -hex 32` |
-| `MCP_AUTH_PASSWORD`   | no, add or use `.env` | HTTP Basic password gating `/authorize` in `oauth` mode (the one human gate). Required when `MCP_AUTH_MODE=oauth`. Generate: `openssl rand -hex 12` |
+| Key                   | Provisioned in `std`?  | Purpose                                                                                                                                             |
+| --------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FIREWORKS_API_KEY`   | yes                    | empty disables synthesis (returns `synthesis:null`)                                                                                                 |
+| `OBSIDIAN_AUTH_TOKEN` | no, `ob login` instead | only if injecting a token directly; `ob login` writes to the `obsidian_config` volume instead                                                       |
+| `MCP_BEARER_TOKEN`    | no, add or use `.env`  | static token; works in `bearer` mode and as an escape hatch in `oauth` mode. Generate: `openssl rand -hex 32`                                       |
+| `MCP_AUTH_PASSWORD`   | no, add or use `.env`  | HTTP Basic password gating `/authorize` in `oauth` mode (the one human gate). Required when `MCP_AUTH_MODE=oauth`. Generate: `openssl rand -hex 12` |
 
 Only `FIREWORKS_API_KEY` lives in Doppler today. Add the others before relying on
 the `doppler run` model for them: `doppler secrets set OBSIDIAN_AUTH_TOKEN -p claude-code -c std`
 (interactive prompt, no value on the command line). Until then they fall back to
-`.env`. `FIREWORKS_API_KEY_FILE` (path to a file holding the key, Docker-secret
-style) remains a third option, unused under the `doppler run` model.
+`.env`. The box uses neither Doppler nor `.env` for the three server secrets: it
+mounts them as files via Compose secrets (next section).
+
+### Secrets on the box: Compose secret files (`docker-compose.secrets.yml`)
+
+The box has no Doppler, and injecting secrets through `--env-file stack.conf` leaks
+them into the container environment (`docker inspect`, `/proc/<pid>/environ`, the
+spawned `vault-query` child). Instead the box overlays `docker-compose.secrets.yml`,
+which mounts each secret as a file at `/run/secrets/<name>` (mode 0444, readable by
+the non-root `node` user) from a host source under `secrets/` kept `600` root-owned.
+
+The server resolves each secret via `src/secrets.ts` (`resolveSecret`): it prefers
+the inline env var when non-empty, else reads `<NAME>_FILE`. So an empty
+`MCP_BEARER_TOKEN` in `stack.conf` makes it fall through to the mounted file.
+
+| Host file (`secrets/`, `chmod 600`) | Mounted at                       | Resolved env var    |
+| ----------------------------------- | -------------------------------- | ------------------- |
+| `secrets/mcp_bearer_token`          | `/run/secrets/mcp_bearer_token`  | `MCP_BEARER_TOKEN`  |
+| `secrets/mcp_auth_password`         | `/run/secrets/mcp_auth_password` | `MCP_AUTH_PASSWORD` |
+| `secrets/fireworks_api_key`         | `/run/secrets/fireworks_api_key` | `FIREWORKS_API_KEY` |
+
+One-time on the box, before the deploy below:
+
+```bash
+mkdir -p /root/obsidian-sync/secrets && chmod 700 /root/obsidian-sync/secrets
+printf '%s' '<token>'    > /root/obsidian-sync/secrets/mcp_bearer_token
+printf '%s' '<password>' > /root/obsidian-sync/secrets/mcp_auth_password
+printf '%s' '<fw-key>'   > /root/obsidian-sync/secrets/fireworks_api_key
+chmod 600 /root/obsidian-sync/secrets/*
+# Remove these three keys from stack.conf so they no longer land in the env;
+# leave the non-secret vars. An unset var resolves empty → the file is used.
+```
+
+`secrets/` is gitignored and excluded from the rsync deploy, so the values live
+only on the box. Local dev skips this overlay (secrets come from Doppler / the
+override), so it needs no `secrets/` files. At-rest encryption (sops/age) was
+declined: the box must auto-restart secrets on reboot, so the decryption key would
+have to live on the same disk, giving no real gain over `600` perms against the
+realistic threats (root compromise, full-disk snapshot).
 
 ### Non-secrets: `.env`
 
-| Key                    | Default                             | Purpose                                                                       |
-| ---------------------- | ----------------------------------- | ----------------------------------------------------------------------------- |
+| Key                    | Default                             | Purpose                                                                               |
+| ---------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
 | `MCP_AUTH_MODE`        | `bearer`                            | `none` (local only) \| `bearer` (static token) \| `oauth` (self-hosted AS, see below) |
-| `MCP_RESOURCE_URL`     | `https://mcp.localhost/mcp`         | public MCP endpoint (OAuth token audience)                                    |
-| `MCP_OAUTH_ISSUER`     | origin of `MCP_RESOURCE_URL`        | OAuth AS issuer (`oauth` mode only)                                           |
-| `OAUTH_STORE`          | `/data/oauth.json`                  | path to the persisted OAuth state (clients + tokens); mount `oauth_data` here |
-| `MCP_DOMAIN`           | `mcp.localhost`                     | subdomain Caddy serves the MCP route on                                       |
-| `FIREWORKS_MODEL`      | `accounts/fireworks/models/glm-5p2` | Fireworks model id                                                            |
-| `FIREWORKS_MAX_TOKENS` | `1024`                              | synthesis output cap                                                          |
+| `MCP_RESOURCE_URL`     | `https://mcp.localhost/mcp`         | public MCP endpoint (OAuth token audience)                                            |
+| `MCP_OAUTH_ISSUER`     | origin of `MCP_RESOURCE_URL`        | OAuth AS issuer (`oauth` mode only)                                                   |
+| `OAUTH_STORE`          | `/data/oauth.json`                  | path to the persisted OAuth state (clients + tokens); mount `oauth_data` here         |
+| `MCP_DOMAIN`           | `mcp.localhost`                     | subdomain Caddy serves the MCP route on                                               |
+| `FIREWORKS_MODEL`      | `accounts/fireworks/models/glm-5p2` | Fireworks model id                                                                    |
+| `FIREWORKS_MAX_TOKENS` | `1024`                              | synthesis output cap                                                                  |
+| `MCP_RATE_LIMIT`       | `30`                                | per-IP token bucket on `/mcp`, requests/min (429 past the cap)                        |
+| `MCP_MAX_CONCURRENCY`  | `2`                                 | global cap on simultaneous `consult` index builds (busy error past the cap)           |
 
 ## Local testing (macOS, docker compose)
 
@@ -156,13 +195,18 @@ All steps are additive; `wireguard` keeps running throughout.
    Requires an **active paid Obsidian Sync subscription**. The token is account-scoped;
    prefer a dedicated account invited only to the target vault.
 
-4. **Bring up only the additive services** (wireguard untouched):
+4. **Bring up only the additive services** (wireguard untouched). On the box every
+   `docker compose` call takes `--env-file stack.conf` (the stale `.env` holds dead
+   couchdb vars) and the secrets overlay so the `mcp` service gets its mounted
+   secret files:
 
    ```bash
-   docker compose up -d obsidian-headless
-   docker compose up -d mcp
-   docker compose up -d caddy            # picks up the new route + MCP_DOMAIN
-   docker compose ps                     # confirm wireguard stayed Up
+   C="docker compose --env-file stack.conf -f docker-compose.yml -f docker-compose.secrets.yml"
+   $C build mcp
+   $C up -d obsidian-headless
+   $C up -d mcp
+   $C up -d caddy                        # picks up the new route + MCP_DOMAIN
+   $C ps                                 # confirm wireguard stayed Up
    ```
 
    Verify the WireGuard tunnel from a peer before and after.
@@ -182,7 +226,7 @@ All steps are additive; `wireguard` keeps running throughout.
      `MCP_RESOURCE_URL`; `MCP_BEARER_TOKEN`, if set, still works as a CLI/test escape hatch.
    - Smoke-test discovery: `curl https://<domain>/.well-known/oauth-authorization-server`,
      and `curl -D- https://<domain>/mcp` should return `401` with a `Bearer ...
-     resource_metadata=...` challenge.
+resource_metadata=...` challenge.
 
 6. **Register in claude.ai**: Settings → Connectors → Add custom connector →
    `https://<domain>/mcp` (leave client id/secret blank) → on the browser consent step a
@@ -197,10 +241,12 @@ All steps are additive; `wireguard` keeps running throughout.
 - **Security hardening** (P0, outside this repo): the legacy `obsidian-couchdb` is still
   published on `:5984` (Docker bypasses ufw) — remove it. SSH allows root + password login
   with no fail2ban — switch to key-only and add fail2ban.
-- **Rate / resource limits** (P1): OAuth endpoints are rate-limited by the SDK, but `/mcp`
-  is not. Each `consult` rebuilds a tantivy index and may call Fireworks; add a per-IP
-  limit + concurrency cap in `server.ts` and `mem_limit`/`cpus` on `mcp` so a flood can't
-  OOM the 2GB box and take WireGuard down with it.
+- **Rate / resource limits** (P1, done): `/mcp` now has a per-IP token bucket
+  (`MCP_RATE_LIMIT`, 429 past the cap) ahead of auth plus a global semaphore on
+  simultaneous `consult` index builds (`MCP_MAX_CONCURRENCY`, busy error past the cap),
+  both in `src/limits.ts`; `mem_limit: 1g` / `cpus: 1.0` cap the `mcp` container so a
+  flood throttles instead of OOM-killing the box. `app.set("trust proxy", 1)` makes the
+  bucket key on the real client IP from Caddy's `X-Forwarded-For`.
 - **vault-query latency**: consult rebuilds an in-memory index per call (no daemon).
   Add an MCP-layer cache keyed on (query, vault mtime) if p95 latency hurts.
 - **obsidian-headless** is open beta (v0.0.12); pinned in the image, re-test on bumps.

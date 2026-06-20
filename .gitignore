@@ -13,3 +13,5 @@ mcp/.env.local
 docker-compose.override.yml
 # Vault project link (absolute paths, per-device)
 .vault.config.json
+# Box-only secret values mounted via docker-compose.secrets.yml (chmod 600 on the box)
+secrets/

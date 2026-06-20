@@ -11,15 +11,24 @@ import {
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { runConsult } from "./consult-tool.js";
 import { synthesisEnabled } from "./synthesis.js";
+import { resolveSecret } from "./secrets.js";
+import { rateLimit, Semaphore, ConcurrencyLimitError } from "./limits.js";
 import { oauthProvider, basicAuthGate } from "./oauth.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const RESOURCE = process.env.MCP_RESOURCE_URL ?? "https://localhost/mcp";
 const AUTH_MODE = (process.env.MCP_AUTH_MODE ?? "bearer") as "none" | "bearer" | "oauth";
-const STATIC_TOKEN = process.env.MCP_BEARER_TOKEN ?? "";
+const STATIC_TOKEN = resolveSecret("MCP_BEARER_TOKEN");
 const ORIGIN = RESOURCE.replace(/\/mcp$/, "");
 
-if (AUTH_MODE === "oauth" && !process.env.MCP_AUTH_PASSWORD) {
+// Flood guards (see limits.ts). Defaults sized for the 1-core/2GB box: claude.ai
+// egress NATs to a few IPs and one consult is several HTTP requests, so the per-IP
+// limit is generous; the concurrency cap is the real OOM backstop.
+const RATE_LIMIT = Number(process.env.MCP_RATE_LIMIT ?? 30); // requests/min/IP
+const MAX_CONCURRENCY = Number(process.env.MCP_MAX_CONCURRENCY ?? 2); // simultaneous consults
+const consultSemaphore = new Semaphore(MAX_CONCURRENCY);
+
+if (AUTH_MODE === "oauth" && !resolveSecret("MCP_AUTH_PASSWORD")) {
   // The /authorize gate is the only thing standing between the public internet
   // and a token for the private vault. Refuse to start without it.
   throw new Error("MCP_AUTH_MODE=oauth requires MCP_AUTH_PASSWORD (the /authorize gate).");
@@ -52,14 +61,18 @@ function buildServer(): McpServer {
     },
     async ({ query, types, include_superseded }) => {
       try {
-        const result = await runConsult(query, { types, includeSuperseded: include_superseded });
+        // Semaphore caps simultaneous index builds; past the cap it rejects fast.
+        const result = await consultSemaphore.run(() =>
+          runConsult(query, { types, includeSuperseded: include_superseded }),
+        );
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        // exit 1/2 from vault-query → tool error surfaced to the client.
-        return {
-          isError: true,
-          content: [{ type: "text", text: `vault-query error: ${(e as Error).message}` }],
-        };
+        // Busy → a distinct retryable message; exit 1/2 from vault-query → tool error.
+        const text =
+          e instanceof ConcurrencyLimitError
+            ? (e as Error).message
+            : `vault-query error: ${(e as Error).message}`;
+        return { isError: true, content: [{ type: "text", text }] };
       }
     },
   );
@@ -67,7 +80,14 @@ function buildServer(): McpServer {
 }
 
 const app = express();
+// One proxy hop (Caddy): make req.ip the real client from X-Forwarded-For so the
+// per-IP rate limiter buckets by client, not by Caddy's address.
+app.set("trust proxy", 1);
 app.use(express.json({ limit: "4mb" }));
+
+// Per-IP token bucket, mounted ahead of auth on the /mcp routes so an
+// unauthenticated flood is throttled before it reaches token verification.
+const mcpRateLimit = rateLimit({ capacity: RATE_LIMIT, windowMs: 60_000 });
 
 if (AUTH_MODE === "oauth") {
   // Self-hosted OAuth 2.1 AS. mcpAuthRouter serves /authorize, /token, /register,
@@ -125,7 +145,7 @@ const mcpAuth =
 // Stateful Streamable HTTP: one transport per MCP session, keyed by Mcp-Session-Id.
 const transports: Record<string, StreamableHTTPServerTransport> = {};
 
-app.post("/mcp", mcpAuth, async (req: Request, res: Response) => {
+app.post("/mcp", mcpRateLimit, mcpAuth, async (req: Request, res: Response) => {
   const sid = req.header("mcp-session-id");
   let transport: StreamableHTTPServerTransport | undefined = sid ? transports[sid] : undefined;
 
@@ -164,8 +184,8 @@ async function sessionRequest(req: Request, res: Response): Promise<void> {
   await transport.handleRequest(req, res);
 }
 
-app.get("/mcp", mcpAuth, sessionRequest);
-app.delete("/mcp", mcpAuth, sessionRequest);
+app.get("/mcp", mcpRateLimit, mcpAuth, sessionRequest);
+app.delete("/mcp", mcpRateLimit, mcpAuth, sessionRequest);
 
 app.get("/healthz", (_req, res) => {
   res.json({ ok: true, auth: AUTH_MODE, synthesis: synthesisEnabled() });

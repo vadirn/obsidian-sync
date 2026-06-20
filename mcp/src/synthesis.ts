@@ -1,27 +1,12 @@
-import { readFileSync } from "node:fs";
 import type { Slice } from "./consult-tool.js";
+import { resolveSecret } from "./secrets.js";
 
 const BASE_URL = process.env.FIREWORKS_BASE_URL ?? "https://api.fireworks.ai/inference/v1";
 const MODEL = process.env.FIREWORKS_MODEL ?? "accounts/fireworks/models/glm-5p2";
 const MAX_TOKENS = Number(process.env.FIREWORKS_MAX_TOKENS ?? 1024);
 
 // Key from env, or from a file (Docker-secret style) when FIREWORKS_API_KEY_FILE is set.
-// The file form keeps the key out of compose env / process listings.
-function resolveApiKey(): string {
-  const direct = process.env.FIREWORKS_API_KEY ?? "";
-  if (direct) return direct;
-  const file = process.env.FIREWORKS_API_KEY_FILE ?? "";
-  if (file) {
-    try {
-      return readFileSync(file, "utf8").trim();
-    } catch (e) {
-      console.error(`could not read FIREWORKS_API_KEY_FILE (${file}): ${(e as Error).message}`);
-    }
-  }
-  return "";
-}
-
-const API_KEY = resolveApiKey();
+const API_KEY = resolveSecret("FIREWORKS_API_KEY");
 
 export function synthesisEnabled(): boolean {
   return API_KEY.length > 0;

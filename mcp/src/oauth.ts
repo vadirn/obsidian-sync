@@ -20,10 +20,12 @@ import type {
   OAuthTokenRevocationRequest,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { resolveSecret } from "./secrets.js";
 
 const RESOURCE = process.env.MCP_RESOURCE_URL ?? "https://localhost/mcp";
 const STORE_PATH = process.env.OAUTH_STORE ?? "/data/oauth.json";
-const STATIC_TOKEN = process.env.MCP_BEARER_TOKEN ?? "";
+const STATIC_TOKEN = resolveSecret("MCP_BEARER_TOKEN");
+const AUTH_PASSWORD = resolveSecret("MCP_AUTH_PASSWORD");
 const ACCESS_TTL = 60 * 60; // 1 hour
 const REFRESH_TTL = 30 * 24 * 60 * 60; // 30 days
 const CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -217,7 +219,7 @@ export const oauthProvider: OAuthServerProvider = {
  * SDK's authorize handler.
  */
 export function basicAuthGate(req: Request, res: Response, next: NextFunction): void {
-  const password = process.env.MCP_AUTH_PASSWORD ?? "";
+  const password = AUTH_PASSWORD;
   const challenge = (): void => {
     res
       .set("WWW-Authenticate", 'Basic realm="consult vault", charset="UTF-8"')

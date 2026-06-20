@@ -70,7 +70,6 @@ services:
       - MCP_OAUTH_ISSUER=${MCP_OAUTH_ISSUER:-}
       - OAUTH_STORE=${OAUTH_STORE:-/data/oauth.json}
       - FIREWORKS_API_KEY=${FIREWORKS_API_KEY:-}
-      - FIREWORKS_API_KEY_FILE=${FIREWORKS_API_KEY_FILE:-}
       - FIREWORKS_MODEL=${FIREWORKS_MODEL:-accounts/fireworks/models/glm-5p2}
       - FIREWORKS_MAX_TOKENS=${FIREWORKS_MAX_TOKENS:-1024}
     volumes:
@@ -79,6 +78,11 @@ services:
     depends_on:
       - obsidian-headless
     restart: unless-stopped
+    # Hard-cap memory and CPU so a consult flood throttles the mcp container
+    # instead of OOM-killing the 2GB/1-core box and taking WireGuard down with it.
+    # Top-level keys (compose v2 on the box), not the swarm-only deploy.resources form.
+    mem_limit: 1g
+    cpus: 1.0
     # no published port: Caddy reaches it on the compose network as mcp:3000
 
 volumes:
