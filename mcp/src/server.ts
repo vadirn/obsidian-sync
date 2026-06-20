@@ -13,6 +13,16 @@ const AUTH_MODE = (process.env.MCP_AUTH_MODE ?? "bearer") as "none" | "bearer" |
 const STATIC_TOKEN = process.env.MCP_BEARER_TOKEN ?? "";
 const ORIGIN = RESOURCE.replace(/\/mcp$/, "");
 
+if (AUTH_MODE === "oauth") {
+  // OAuth token validation (signature + audience) is not implemented: the authGuard
+  // 'oauth' branch falls through to 401. Fail loud at startup instead of silently
+  // rejecting every request while /healthz reports auth=oauth. See DEPLOY.md step 5.
+  throw new Error(
+    "MCP_AUTH_MODE=oauth is not supported yet: OAuth validation is unimplemented. " +
+      "Use 'bearer' or 'none', or wire requireBearerAuth first (see DEPLOY.md).",
+  );
+}
+
 function buildServer(): McpServer {
   const server = new McpServer({ name: "obsidian-consult", version: "1.0.0" });
   server.registerTool(
@@ -23,7 +33,7 @@ function buildServer(): McpServer {
         "Retrieve the user's own prior thinking (notes, decisions, definitions, positions) from " +
         "their Obsidian vault for a task framing. Returns a query-side synthesis plus the evidence " +
         "slices it rests on (path + section address + excerpt). Sets abstained:true when nothing " +
-        "clears the relevance gate (confident silence) — proceed without vault context in that case.",
+        "clears the relevance gate (confident silence): proceed without vault context in that case.",
       inputSchema: {
         query: z.string().describe("The task framing or topic to search the vault for."),
         types: z
@@ -57,7 +67,7 @@ function buildServer(): McpServer {
 const app = express();
 app.use(express.json({ limit: "4mb" }));
 
-// RFC 9728 Protected Resource Metadata — points OAuth clients at the authorization server.
+// RFC 9728 Protected Resource Metadata: points OAuth clients at the authorization server.
 app.get("/.well-known/oauth-protected-resource", (_req, res) => {
   const issuer = process.env.MCP_OAUTH_ISSUER ?? ORIGIN;
   res.json({ resource: RESOURCE, authorization_servers: [issuer] });
@@ -95,7 +105,7 @@ app.post("/mcp", authGuard, async (req: Request, res: Response) => {
   if (!transport && !sid && isInitializeRequest(req.body)) {
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
-      enableJsonResponse: true, // plain JSON replies (no SSE) — simpler for clients and curl
+      enableJsonResponse: true, // plain JSON replies (no SSE), simpler for clients and curl
       onsessioninitialized: (id) => {
         transports[id] = transport!;
       },

@@ -72,6 +72,7 @@ services:
       - FIREWORKS_API_KEY=${FIREWORKS_API_KEY:-}
       - FIREWORKS_API_KEY_FILE=${FIREWORKS_API_KEY_FILE:-}
       - FIREWORKS_MODEL=${FIREWORKS_MODEL:-accounts/fireworks/models/glm-5p2}
+      - FIREWORKS_MAX_TOKENS=${FIREWORKS_MAX_TOKENS:-1024}
     volumes:
       - vault_data:/vault:ro # read-only: the MCP server never writes the vault
     depends_on:

@@ -48,7 +48,7 @@ function renderSlices(slices: Slice[]): string {
 
 /**
  * Query-scoped synthesis of the slices via Fireworks (GLM). Returns prose, or null
- * if synthesis is disabled (no API key) or the call fails — callers fall back to
+ * if synthesis is disabled (no API key) or the call fails. Callers fall back to
  * returning slices alone so a synthesis outage never breaks the consult tool.
  */
 export async function synthesize(query: string, slices: Slice[]): Promise<string | null> {

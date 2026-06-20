@@ -2,10 +2,10 @@
 
 A Vultr VPS that runs three things behind Docker:
 
-1. **WireGuard** — a personal VPN (the original reason for the box).
-2. **obsidian-headless** — official Obsidian Sync in headless mode, pulling the
+1. **WireGuard**: a personal VPN (the original reason for the box).
+2. **obsidian-headless**: official Obsidian Sync in headless mode, pulling the
    vault down as plaintext `.md` files into a shared volume.
-3. **consult MCP server** — a read-only HTTP MCP endpoint that exposes
+3. **consult MCP server**: a read-only HTTP MCP endpoint that exposes
    `vault-query consult` over the synced vault, fronted by Caddy with auto TLS.
 
 The legacy self-hosted LiveSync/CouchDB stack was removed. Sync now runs through

@@ -1,8 +1,8 @@
-# consult MCP server — operations & deploy
+# consult MCP server: operations & deploy
 
 A read-only remote MCP server that exposes the user's `vault-query consult` over
 Streamable HTTP, with server-side query-scoped synthesis via Fireworks (GLM 5.2).
-Additive to the existing `obsidian-sync` stack — it does not touch the `wireguard`
+Additive to the existing `obsidian-sync` stack. It does not touch the `wireguard`
 service, its volume, or `WIREGUARD_PEERS`.
 
 ## Architecture
@@ -32,7 +32,7 @@ override `.env` for the same name. Keep non-secrets in the repo-root `.env`
 
 The harness blocks edits to `.env.example`, so this is the authoritative list.
 
-### Secrets — Doppler (`claude-code` project, `std` config)
+### Secrets: Doppler (`claude-code` project, `std` config)
 
 Run anything that needs a secret under `doppler run`:
 
@@ -45,8 +45,8 @@ doppler run -p claude-code -c std -- node dist/server.js
 | Key                   | Provisioned in `std`?  | Purpose                                                          |
 | --------------------- | ---------------------- | ---------------------------------------------------------------- |
 | `FIREWORKS_API_KEY`   | yes                    | empty disables synthesis (returns `synthesis:null`)              |
-| `OBSIDIAN_AUTH_TOKEN` | no — add or use `.env` | dedicated Obsidian account token (account-scoped — keep secret)  |
-| `MCP_BEARER_TOKEN`    | no — add or use `.env` | static token for `bearer` mode. Generate: `openssl rand -hex 32` |
+| `OBSIDIAN_AUTH_TOKEN` | no, add or use `.env` | dedicated Obsidian account token (account-scoped, keep secret)  |
+| `MCP_BEARER_TOKEN`    | no, add or use `.env` | static token for `bearer` mode. Generate: `openssl rand -hex 32` |
 
 Only `FIREWORKS_API_KEY` lives in Doppler today. Add the others before relying on
 the `doppler run` model for them: `doppler secrets set OBSIDIAN_AUTH_TOKEN -p claude-code -c std`
@@ -54,7 +54,7 @@ the `doppler run` model for them: `doppler secrets set OBSIDIAN_AUTH_TOKEN -p cl
 `.env`. `FIREWORKS_API_KEY_FILE` (path to a file holding the key, Docker-secret
 style) remains a third option, unused under the `doppler run` model.
 
-### Non-secrets — `.env`
+### Non-secrets: `.env`
 
 | Key                    | Default                             | Purpose                                                                       |
 | ---------------------- | ----------------------------------- | ----------------------------------------------------------------------------- |
@@ -71,12 +71,12 @@ The MCP server is exercised without real Obsidian Sync credentials by mounting a
 stub vault and skipping the obsidian-headless sidecar.
 
 > If `docker compose build` hangs at `error getting credentials` (the `credsStore`
-> helper — e.g. `osxkeychain` — blocks during `FROM` image resolution), either drop
+> helper, e.g. `osxkeychain`, blocks during `FROM` image resolution), either drop
 > `credsStore` from `~/.docker/config.json` so public bases pull anonymously, or use the
 > registry-free `mcp/Dockerfile.localtest`, which builds from a locally-cached
 > devcontainer base and installs Rust via rustup:
 > `docker build -f mcp/Dockerfile.localtest -t obsidian-mcp:localtest mcp`.
-> This is a local workaround only — deploy uses `mcp/Dockerfile`.
+> This is a local workaround only: deploy uses `mcp/Dockerfile`.
 
 ```bash
 # 1. Vendor the vault-query Rust source into the build context (Docker can't reach
@@ -139,10 +139,10 @@ All steps are additive; `wireguard` keeps running throughout.
 
 2. **Vendor vault-query on the box** (the source must be reachable):
    `VAULT_QUERY_SRC=/path/to/nix/vault-query bash mcp/vendor-vault-query.sh`, or copy a
-   prebuilt Linux binary into the image (faster — replace stage 1 of `mcp/Dockerfile`
+   prebuilt Linux binary into the image (faster: replace stage 1 of `mcp/Dockerfile`
    with a `COPY` of the binary).
 
-3. **Dedicated Obsidian account** (decided at deploy — see "Sync account" below). One-time:
+3. **Dedicated Obsidian account** (decided at deploy, see "Sync account" below). One-time:
 
    ```bash
    docker compose run --rm obsidian-headless ob login
@@ -167,7 +167,7 @@ All steps are additive; `wireguard` keeps running throughout.
 
 5. **Auth before registering the connector**: Claude's custom-connector flow drives an
    OAuth discovery + PKCE handshake; a static bearer token is likely **not** accepted by
-   the standard "Add custom connector" path (confidence 7/10 — verify on your tier first).
+   the standard "Add custom connector" path (confidence 7/10, verify on your tier first).
    - First verify: try `MCP_AUTH_MODE=bearer` and adding the connector with the token in
      Claude's Advanced settings.
    - If rejected, switch to `MCP_AUTH_MODE=oauth` and finish the OAuth path in
@@ -184,10 +184,10 @@ All steps are additive; `wireguard` keeps running throughout.
 ## Open items
 
 - **Sync account** (deferred): dedicated paid Obsidian account vs personal. Dedicated
-  recommended (9/10) — the stored token is account-scoped (full-account blast radius).
+  recommended (9/10): the stored token is account-scoped (full-account blast radius).
 - **OAuth vs bearer**: verify what Claude's connector flow accepts before building the
   full OAuth path (step 5).
 - **vault-query latency**: consult rebuilds an in-memory index per call (no daemon).
   Add an MCP-layer cache keyed on (query, vault mtime) if p95 latency hurts.
-- **obsidian-headless** is open beta (v0.0.12); pinned in the image — re-test on bumps.
+- **obsidian-headless** is open beta (v0.0.12); pinned in the image, re-test on bumps.
   Never run desktop Sync and headless Sync on the same vault at once.
