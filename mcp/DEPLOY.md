@@ -45,8 +45,9 @@ doppler run -p claude-code -c std -- node dist/server.js
 | Key                   | Provisioned in `std`? | Purpose                                                          |
 | --------------------- | --------------------- | ---------------------------------------------------------------- |
 | `FIREWORKS_API_KEY`   | yes                   | empty disables synthesis (returns `synthesis:null`)              |
-| `OBSIDIAN_AUTH_TOKEN` | no, add or use `.env` | dedicated Obsidian account token (account-scoped, keep secret)   |
-| `MCP_BEARER_TOKEN`    | no, add or use `.env` | static token for `bearer` mode. Generate: `openssl rand -hex 32` |
+| `OBSIDIAN_AUTH_TOKEN` | no, `ob login` instead | only if injecting a token directly; `ob login` writes to the `obsidian_config` volume instead |
+| `MCP_BEARER_TOKEN`    | no, add or use `.env` | static token; works in `bearer` mode and as an escape hatch in `oauth` mode. Generate: `openssl rand -hex 32` |
+| `MCP_AUTH_PASSWORD`   | no, add or use `.env` | HTTP Basic password gating `/authorize` in `oauth` mode (the one human gate). Required when `MCP_AUTH_MODE=oauth`. Generate: `openssl rand -hex 12` |
 
 Only `FIREWORKS_API_KEY` lives in Doppler today. Add the others before relying on
 the `doppler run` model for them: `doppler secrets set OBSIDIAN_AUTH_TOKEN -p claude-code -c std`
@@ -58,9 +59,10 @@ style) remains a third option, unused under the `doppler run` model.
 
 | Key                    | Default                             | Purpose                                                                       |
 | ---------------------- | ----------------------------------- | ----------------------------------------------------------------------------- |
-| `MCP_AUTH_MODE`        | `bearer`                            | `none` (local only) \| `bearer` (static token) \| `oauth` (deploy, see below) |
+| `MCP_AUTH_MODE`        | `bearer`                            | `none` (local only) \| `bearer` (static token) \| `oauth` (self-hosted AS, see below) |
 | `MCP_RESOURCE_URL`     | `https://mcp.localhost/mcp`         | public MCP endpoint (OAuth token audience)                                    |
 | `MCP_OAUTH_ISSUER`     | origin of `MCP_RESOURCE_URL`        | OAuth AS issuer (`oauth` mode only)                                           |
+| `OAUTH_STORE`          | `/data/oauth.json`                  | path to the persisted OAuth state (clients + tokens); mount `oauth_data` here |
 | `MCP_DOMAIN`           | `mcp.localhost`                     | subdomain Caddy serves the MCP route on                                       |
 | `FIREWORKS_MODEL`      | `accounts/fireworks/models/glm-5p2` | Fireworks model id                                                            |
 | `FIREWORKS_MAX_TOKENS` | `1024`                              | synthesis output cap                                                          |
@@ -165,28 +167,40 @@ All steps are additive; `wireguard` keeps running throughout.
 
    Verify the WireGuard tunnel from a peer before and after.
 
-5. **Auth before registering the connector**: Claude's custom-connector flow drives an
-   OAuth discovery + PKCE handshake; a static bearer token is likely **not** accepted by
-   the standard "Add custom connector" path (confidence 7/10, verify on your tier first).
-   - First verify: try `MCP_AUTH_MODE=bearer` and adding the connector with the token in
-     Claude's Advanced settings.
-   - If rejected, switch to `MCP_AUTH_MODE=oauth` and finish the OAuth path in
-     `src/server.ts` (mount the SDK `mcpAuthRouter` to self-host a minimal OAuth 2.1 AS,
-     and replace the `oauth` branch in `authGuard` with `requireBearerAuth` validating
-     `aud === MCP_RESOURCE_URL`). The PRM endpoint (`/.well-known/oauth-protected-resource`)
-     is already served.
+5. **Auth: `oauth` mode.** claude.ai's custom-connector flow drives OAuth discovery +
+   Dynamic Client Registration + PKCE; it does **not** accept a static bearer (confirmed).
+   The server self-hosts a minimal OAuth 2.1 AS (`src/oauth.ts` + the SDK `mcpAuthRouter`
+   wired in `src/server.ts`):
+   - Set `MCP_AUTH_MODE=oauth` and `MCP_AUTH_PASSWORD` (the server refuses to start in
+     `oauth` mode without it). The AS endpoints are served at the issuer origin:
+     `/.well-known/oauth-authorization-server`, `/authorize`, `/token`, `/register`,
+     `/revoke`, and the path-specific `/.well-known/oauth-protected-resource/mcp`.
+   - DCR auto-registers any client (public, PKCE-only); no `client_id`/`client_secret`
+     to enter. Clients + tokens persist to `OAUTH_STORE` on the `oauth_data` volume.
+   - The only human gate is `/authorize`, protected by HTTP Basic against
+     `MCP_AUTH_PASSWORD` (any username). `verifyAccessToken` binds tokens to
+     `MCP_RESOURCE_URL`; `MCP_BEARER_TOKEN`, if set, still works as a CLI/test escape hatch.
+   - Smoke-test discovery: `curl https://<domain>/.well-known/oauth-authorization-server`,
+     and `curl -D- https://<domain>/mcp` should return `401` with a `Bearer ...
+     resource_metadata=...` challenge.
 
-6. **Register in Claude**: Settings → Connectors → Add custom connector →
-   `https://mcp.<yourdomain>/mcp` → complete OAuth consent. Claude reaches the box from
-   Anthropic's cloud, so the route must be publicly reachable on 443 (it is, via Caddy).
-   Team/Enterprise: an Owner enables custom connectors org-wide first.
+6. **Register in claude.ai**: Settings → Connectors → Add custom connector →
+   `https://<domain>/mcp` (leave client id/secret blank) → on the browser consent step a
+   Basic-auth prompt (realm "consult vault") asks for `MCP_AUTH_PASSWORD`. Claude reaches
+   the box from Anthropic's cloud, so the route must be publicly reachable on 443 (it is,
+   via Caddy). Team/Enterprise: an Owner enables custom connectors org-wide first.
 
 ## Open items
 
-- **Sync account** (deferred): dedicated paid Obsidian account vs personal. Dedicated
-  recommended (9/10): the stored token is account-scoped (full-account blast radius).
-- **OAuth vs bearer**: verify what Claude's connector flow accepts before building the
-  full OAuth path (step 5).
+- **Sync account**: currently the personal Obsidian account (full-account blast radius if
+  the box is compromised). Dedicated account is safer (9/10); revisit if hardening further.
+- **Security hardening** (P0, outside this repo): the legacy `obsidian-couchdb` is still
+  published on `:5984` (Docker bypasses ufw) — remove it. SSH allows root + password login
+  with no fail2ban — switch to key-only and add fail2ban.
+- **Rate / resource limits** (P1): OAuth endpoints are rate-limited by the SDK, but `/mcp`
+  is not. Each `consult` rebuilds a tantivy index and may call Fireworks; add a per-IP
+  limit + concurrency cap in `server.ts` and `mem_limit`/`cpus` on `mcp` so a flood can't
+  OOM the 2GB box and take WireGuard down with it.
 - **vault-query latency**: consult rebuilds an in-memory index per call (no daemon).
   Add an MCP-layer cache keyed on (query, vault mtime) if p95 latency hurts.
 - **obsidian-headless** is open beta (v0.0.12); pinned in the image, re-test on bumps.

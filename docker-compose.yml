@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   wireguard:
     image: linuxserver/wireguard:latest
@@ -67,14 +65,17 @@ services:
       - VAULT_ROOT=/vault
       - MCP_AUTH_MODE=${MCP_AUTH_MODE:-bearer}
       - MCP_BEARER_TOKEN=${MCP_BEARER_TOKEN:-}
+      - MCP_AUTH_PASSWORD=${MCP_AUTH_PASSWORD:-}
       - MCP_RESOURCE_URL=${MCP_RESOURCE_URL:-https://mcp.localhost/mcp}
       - MCP_OAUTH_ISSUER=${MCP_OAUTH_ISSUER:-}
+      - OAUTH_STORE=${OAUTH_STORE:-/data/oauth.json}
       - FIREWORKS_API_KEY=${FIREWORKS_API_KEY:-}
       - FIREWORKS_API_KEY_FILE=${FIREWORKS_API_KEY_FILE:-}
       - FIREWORKS_MODEL=${FIREWORKS_MODEL:-accounts/fireworks/models/glm-5p2}
       - FIREWORKS_MAX_TOKENS=${FIREWORKS_MAX_TOKENS:-1024}
     volumes:
       - vault_data:/vault:ro # read-only: the MCP server never writes the vault
+      - oauth_data:/data # OAuth clients + tokens (DCR registrations, live grants)
     depends_on:
       - obsidian-headless
     restart: unless-stopped
@@ -88,4 +89,6 @@ volumes:
   vault_data:
     driver: local
   obsidian_config:
+    driver: local
+  oauth_data:
     driver: local

@@ -28,6 +28,10 @@ COPY --from=vqbuild /usr/local/bin/vault-query /usr/local/bin/vault-query
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
 COPY --from=appbuild /app/dist ./dist
+# OAuth state (clients + live tokens) persists here. Own it as node before the
+# named volume mounts: a fresh volume inherits the image dir's node ownership, so
+# the non-root runtime can write /data/oauth.json.
+RUN mkdir -p /data && chown node:node /data
 USER node
 EXPOSE 3000
 CMD ["node", "dist/server.js"]

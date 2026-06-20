@@ -4,8 +4,14 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import {
+  mcpAuthRouter,
+  getOAuthProtectedResourceMetadataUrl,
+} from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { runConsult } from "./consult-tool.js";
 import { synthesisEnabled } from "./synthesis.js";
+import { oauthProvider, basicAuthGate } from "./oauth.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const RESOURCE = process.env.MCP_RESOURCE_URL ?? "https://localhost/mcp";
@@ -13,14 +19,10 @@ const AUTH_MODE = (process.env.MCP_AUTH_MODE ?? "bearer") as "none" | "bearer" |
 const STATIC_TOKEN = process.env.MCP_BEARER_TOKEN ?? "";
 const ORIGIN = RESOURCE.replace(/\/mcp$/, "");
 
-if (AUTH_MODE === "oauth") {
-  // OAuth token validation (signature + audience) is not implemented: the authGuard
-  // 'oauth' branch falls through to 401. Fail loud at startup instead of silently
-  // rejecting every request while /healthz reports auth=oauth. See DEPLOY.md step 5.
-  throw new Error(
-    "MCP_AUTH_MODE=oauth is not supported yet: OAuth validation is unimplemented. " +
-      "Use 'bearer' or 'none', or wire requireBearerAuth first (see DEPLOY.md).",
-  );
+if (AUTH_MODE === "oauth" && !process.env.MCP_AUTH_PASSWORD) {
+  // The /authorize gate is the only thing standing between the public internet
+  // and a token for the private vault. Refuse to start without it.
+  throw new Error("MCP_AUTH_MODE=oauth requires MCP_AUTH_PASSWORD (the /authorize gate).");
 }
 
 function buildServer(): McpServer {
@@ -67,11 +69,29 @@ function buildServer(): McpServer {
 const app = express();
 app.use(express.json({ limit: "4mb" }));
 
-// RFC 9728 Protected Resource Metadata: points OAuth clients at the authorization server.
-app.get("/.well-known/oauth-protected-resource", (_req, res) => {
-  const issuer = process.env.MCP_OAUTH_ISSUER ?? ORIGIN;
-  res.json({ resource: RESOURCE, authorization_servers: [issuer] });
-});
+if (AUTH_MODE === "oauth") {
+  // Self-hosted OAuth 2.1 AS. mcpAuthRouter serves /authorize, /token, /register,
+  // /revoke, /.well-known/oauth-authorization-server, and the path-specific
+  // /.well-known/oauth-protected-resource/mcp. The Basic gate runs ahead of the
+  // SDK's /authorize handler so only an authenticated human can mint a code.
+  app.use("/authorize", basicAuthGate);
+  app.use(
+    mcpAuthRouter({
+      provider: oauthProvider,
+      issuerUrl: new URL(ORIGIN),
+      baseUrl: new URL(ORIGIN),
+      resourceServerUrl: new URL(RESOURCE),
+      scopesSupported: [],
+      resourceName: "Obsidian consult vault",
+    }),
+  );
+} else {
+  // RFC 9728 Protected Resource Metadata: points OAuth clients at the authorization server.
+  app.get("/.well-known/oauth-protected-resource", (_req, res) => {
+    const issuer = process.env.MCP_OAUTH_ISSUER ?? ORIGIN;
+    res.json({ resource: RESOURCE, authorization_servers: [issuer] });
+  });
+}
 
 function authGuard(req: Request, res: Response, next: NextFunction): void {
   if (AUTH_MODE === "none") return next();
@@ -82,10 +102,7 @@ function authGuard(req: Request, res: Response, next: NextFunction): void {
   if (AUTH_MODE === "bearer" && token && STATIC_TOKEN && token === STATIC_TOKEN) {
     return next();
   }
-  // AUTH_MODE === 'oauth' is a deploy-time path: full OAuth 2.1 validation (verify the
-  // token's signature + audience against MCP_OAUTH_ISSUER) is wired before connector
-  // registration, once we confirm what Claude's connector flow requires (see DEPLOY.md).
-
+  // oauth mode never reaches here: those routes use requireBearerAuth (see mcpAuth).
   res
     .status(401)
     .set(
@@ -95,10 +112,20 @@ function authGuard(req: Request, res: Response, next: NextFunction): void {
     .json({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized" }, id: null });
 }
 
+// In oauth mode the /mcp routes validate OAuth-issued (or static) tokens via the
+// SDK middleware; otherwise the bearer/none authGuard applies.
+const mcpAuth =
+  AUTH_MODE === "oauth"
+    ? requireBearerAuth({
+        verifier: oauthProvider,
+        resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(new URL(RESOURCE)),
+      })
+    : authGuard;
+
 // Stateful Streamable HTTP: one transport per MCP session, keyed by Mcp-Session-Id.
 const transports: Record<string, StreamableHTTPServerTransport> = {};
 
-app.post("/mcp", authGuard, async (req: Request, res: Response) => {
+app.post("/mcp", mcpAuth, async (req: Request, res: Response) => {
   const sid = req.header("mcp-session-id");
   let transport: StreamableHTTPServerTransport | undefined = sid ? transports[sid] : undefined;
 
@@ -137,8 +164,8 @@ async function sessionRequest(req: Request, res: Response): Promise<void> {
   await transport.handleRequest(req, res);
 }
 
-app.get("/mcp", authGuard, sessionRequest);
-app.delete("/mcp", authGuard, sessionRequest);
+app.get("/mcp", mcpAuth, sessionRequest);
+app.delete("/mcp", mcpAuth, sessionRequest);
 
 app.get("/healthz", (_req, res) => {
   res.json({ ok: true, auth: AUTH_MODE, synthesis: synthesisEnabled() });
