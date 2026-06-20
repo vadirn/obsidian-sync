@@ -105,13 +105,29 @@ export class VaultQueryError extends Error {
 function run(args: string[]): Promise<{ stdout: string; code: number }> {
   return new Promise((resolve, reject) => {
     execFile(BIN, args, { maxBuffer: 32 * 1024 * 1024, timeout: 60_000 }, (err, stdout, stderr) => {
-      // execFile sets err.code to the numeric exit status for non-zero exits.
-      const code =
-        err && typeof (err as { code?: unknown }).code === "number"
-          ? (err as { code: number }).code
-          : 0;
-      // exit 0 = selected / read ok; exit 4 = consult abstain (NORMAL, envelope on stdout).
-      if (code === 0 || code === 4) {
+      // No err: exit 0 = selected / read ok.
+      if (!err) {
+        resolve({ stdout, code: 0 });
+        return;
+      }
+      // execFile sets err.code to the numeric exit status only for a clean non-zero exit.
+      // A timeout (code null, signal set) or maxBuffer overflow (code is the string
+      // ERR_CHILD_PROCESS_STDIO_MAXBUFFER) leaves code non-numeric: stdout is partial or
+      // empty, so treat it as failure rather than feeding "" to JSON.parse.
+      const code = (err as { code?: unknown }).code;
+      if (typeof code !== "number") {
+        const signal = (err as { signal?: string | null }).signal;
+        const reason =
+          code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+            ? "output exceeded the 32MB maxBuffer"
+            : signal
+              ? `killed by ${signal} (likely the 60s timeout)`
+              : (err as Error).message;
+        reject(new VaultQueryError(`vault-query did not exit cleanly: ${reason}`, -1));
+        return;
+      }
+      // exit 4 = consult abstain (NORMAL, envelope on stdout).
+      if (code === 4) {
         resolve({ stdout, code });
         return;
       }
