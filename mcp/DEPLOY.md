@@ -60,18 +60,28 @@ mounts them as files via Compose secrets (next section).
 The box has no Doppler, and injecting secrets through `--env-file stack.conf` leaks
 them into the container environment (`docker inspect`, `/proc/<pid>/environ`, the
 spawned `vault-query` child). Instead the box overlays `docker-compose.secrets.yml`,
-which mounts each secret as a file at `/run/secrets/<name>` (mode 0444, readable by
-the non-root `node` user) from a host source under `secrets/` kept `600` root-owned.
+which mounts each secret as a file at `/run/secrets/<name>` from a host source under
+`secrets/`.
+
+Perms matter: plain `docker compose` (non-swarm) bind-mounts a file secret and
+**preserves the host file's mode** — the `uid`/`gid`/`mode` secret options are
+swarm-only and ignored here. The container runs as the non-root `node` user, so the
+host file must be world-readable (`0444`) or `node` gets `EACCES` and the server
+crash-loops on the missing secret. Host-side access is gated by the **directory**:
+`secrets/` is `0700 root`, so no other host user can traverse into it. `0444` files
+in a `0700` dir are readable by the container yet unreachable by any non-root host
+user, and at-rest exposure is unchanged from `0600` (root and disk snapshots read
+either).
 
 The server resolves each secret via `src/secrets.ts` (`resolveSecret`): it prefers
 the inline env var when non-empty, else reads `<NAME>_FILE`. So an empty
 `MCP_BEARER_TOKEN` in `stack.conf` makes it fall through to the mounted file.
 
-| Host file (`secrets/`, `chmod 600`) | Mounted at                       | Resolved env var    |
-| ----------------------------------- | -------------------------------- | ------------------- |
-| `secrets/mcp_bearer_token`          | `/run/secrets/mcp_bearer_token`  | `MCP_BEARER_TOKEN`  |
-| `secrets/mcp_auth_password`         | `/run/secrets/mcp_auth_password` | `MCP_AUTH_PASSWORD` |
-| `secrets/fireworks_api_key`         | `/run/secrets/fireworks_api_key` | `FIREWORKS_API_KEY` |
+| Host file (`secrets/`, `0444` in a `0700` dir) | Mounted at                       | Resolved env var    |
+| ---------------------------------------------- | -------------------------------- | ------------------- |
+| `secrets/mcp_bearer_token`                     | `/run/secrets/mcp_bearer_token`  | `MCP_BEARER_TOKEN`  |
+| `secrets/mcp_auth_password`                    | `/run/secrets/mcp_auth_password` | `MCP_AUTH_PASSWORD` |
+| `secrets/fireworks_api_key`                    | `/run/secrets/fireworks_api_key` | `FIREWORKS_API_KEY` |
 
 One-time on the box, before the deploy below:
 
@@ -80,7 +90,8 @@ mkdir -p /root/obsidian-sync/secrets && chmod 700 /root/obsidian-sync/secrets
 printf '%s' '<token>'    > /root/obsidian-sync/secrets/mcp_bearer_token
 printf '%s' '<password>' > /root/obsidian-sync/secrets/mcp_auth_password
 printf '%s' '<fw-key>'   > /root/obsidian-sync/secrets/fireworks_api_key
-chmod 600 /root/obsidian-sync/secrets/*
+chmod 444 /root/obsidian-sync/secrets/*   # readable by the container's node user;
+                                          # the 0700 dir is the host-side gate
 # Remove these three keys from stack.conf so they no longer land in the env;
 # leave the non-secret vars. An unset var resolves empty → the file is used.
 ```
@@ -89,7 +100,7 @@ chmod 600 /root/obsidian-sync/secrets/*
 only on the box. Local dev skips this overlay (secrets come from Doppler / the
 override), so it needs no `secrets/` files. At-rest encryption (sops/age) was
 declined: the box must auto-restart secrets on reboot, so the decryption key would
-have to live on the same disk, giving no real gain over `600` perms against the
+have to live on the same disk, giving no real gain over file perms against the
 realistic threats (root compromise, full-disk snapshot).
 
 ### Non-secrets: `.env`
