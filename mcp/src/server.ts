@@ -10,6 +10,7 @@ import {
 } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { runConsult } from "./consult-tool.js";
+import { registerVaultTools } from "./vault-tools.js";
 import { synthesisEnabled } from "./synthesis.js";
 import { resolveSecret } from "./secrets.js";
 import { rateLimit, Semaphore, ConcurrencyLimitError } from "./limits.js";
@@ -24,8 +25,9 @@ const AUTH_MODE = (process.env.MCP_AUTH_MODE ?? "bearer") as "none" | "bearer" |
 // egress NATs to a few IPs and one consult is several HTTP requests, so the per-IP
 // limit is generous; the concurrency cap is the real OOM backstop.
 const RATE_LIMIT = Number(process.env.MCP_RATE_LIMIT ?? 30); // requests/min/IP
-const MAX_CONCURRENCY = Number(process.env.MCP_MAX_CONCURRENCY ?? 2); // simultaneous consults
-const consultSemaphore = new Semaphore(MAX_CONCURRENCY);
+const MAX_CONCURRENCY = Number(process.env.MCP_MAX_CONCURRENCY ?? 2); // simultaneous index builds
+// Guards both consult and search: each rebuilds the in-memory tantivy index per call.
+const indexSemaphore = new Semaphore(MAX_CONCURRENCY);
 
 if (AUTH_MODE === "oauth" && !resolveSecret("MCP_AUTH_PASSWORD")) {
   // The /authorize gate is the only thing standing between the public internet
@@ -61,7 +63,7 @@ function buildServer(): McpServer {
     async ({ query, types, include_superseded }) => {
       try {
         // Semaphore caps simultaneous index builds; past the cap it rejects fast.
-        const result = await consultSemaphore.run(() =>
+        const result = await indexSemaphore.run(() =>
           runConsult(query, { types, includeSuperseded: include_superseded }),
         );
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
@@ -75,6 +77,7 @@ function buildServer(): McpServer {
       }
     },
   );
+  registerVaultTools(server, indexSemaphore);
   return server;
 }
 
