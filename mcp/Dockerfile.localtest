@@ -1,0 +1,30 @@
+# LOCAL-TEST ONLY. The production image is mcp/Dockerfile (rust:1.85 + node:22 from
+# docker.io). This variant builds from a locally-cached devcontainer base and installs
+# Rust via rustup, so it needs no docker.io base-image pulls — used when the registry
+# is unreachable. Not for deploy.
+FROM mcr.microsoft.com/devcontainers/javascript-node:22
+
+USER root
+WORKDIR /build
+
+# Rust 1.85 (Cargo edition 2024) via rustup; crates.io is reachable.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85.0 --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Build vault-query from the vendored source.
+COPY .vault-query-src/ ./vq/
+RUN cd vq && cargo build --release --locked && cp target/release/vault-query /usr/local/bin/vault-query
+
+# Build the TypeScript MCP server.
+COPY package.json package-lock.json* ./app/
+RUN cd app && npm install
+COPY tsconfig.json ./app/
+COPY src ./app/src
+RUN cd app && npm run build
+
+ENV NODE_ENV=production \
+    VAULT_ROOT=/vault \
+    VAULT_QUERY_BIN=/usr/local/bin/vault-query
+WORKDIR /build/app
+EXPOSE 3000
+CMD ["node", "dist/server.js"]

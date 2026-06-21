@@ -1,201 +1,143 @@
-# Obsidian Sync + Wireguard VPN
+# Obsidian vault access on a VPS
 
-Self-hosted livesync + VPN on Vultr VPS using Docker + Caddy.
+A Vultr VPS that runs three things behind Docker:
+
+1. **WireGuard**: a personal VPN (the original reason for the box).
+2. **obsidian-headless**: official Obsidian Sync in headless mode, pulling the
+   vault down as plaintext `.md` files into a shared volume.
+3. **consult MCP server**: a read-only HTTP MCP endpoint that exposes
+   `vault-query consult` over the synced vault, fronted by Caddy with auto TLS.
+
+The legacy self-hosted LiveSync/CouchDB stack was removed. Sync now runs through
+the official Obsidian Sync service; the MCP server reads the mirrored files.
 
 ## Stack
 
-- **CouchDB 3.3** - Database backend for livesync
-- **Caddy** - Reverse proxy with auto SSL/TLS
-- **Wireguard** - VPN for secure access
+| Service             | Image / build                      | Role                                                  |
+| ------------------- | ---------------------------------- | ----------------------------------------------------- |
+| `wireguard`         | `linuxserver/wireguard`            | Personal VPN. Independent of the vault services.      |
+| `caddy`             | `caddy:latest`                     | Reverse proxy, auto SSL/TLS, serves `{$MCP_DOMAIN}`.  |
+| `obsidian-headless` | `mcp/obsidian-headless.Dockerfile` | Pull-only Obsidian Sync → `vault_data` volume.        |
+| `mcp`               | `mcp/Dockerfile`                   | Read-only consult MCP server (`vault-query` + synth). |
 
-## Quick Start
+Volumes: `wireguard_config`, `caddy_data`, `vault_data` (the mirrored vault),
+`obsidian_config` (the headless Sync account state).
+
+## Quick start
 
 ### Prerequisites
 
-- Vultr account (or any VPS provider)
-- Domain name (optional for VPN-only setup)
-- ~$12/mo budget (4GB RAM, 80GB SSD recommended)
+- Vultr account (or any VPS provider).
+- A domain, for the MCP route and its TLS certificate.
+- An active paid Obsidian Sync subscription (a dedicated account is recommended;
+  the stored token is account-scoped).
 
-### 1. VPS Setup on Vultr
+### 1. VPS setup
 
-**Deploy instance:**
-1. Login to Vultr → Deploy New Server
-2. Select: Ubuntu 22.04 LTS, Cloud Compute, 4GB RAM / 80GB SSD
-3. Add SSH key
-4. Note the IP address
+Deploy Ubuntu 22.04 LTS (2GB RAM is enough; 4GB if the vault is large), add an
+SSH key, note the IP.
 
-**SSH in:**
 ```bash
 ssh root@YOUR_VPS_IP
-```
-
-**Install Docker:**
-```bash
 apt update && apt upgrade -y
 apt install -y docker.io docker-compose git
 systemctl start docker && systemctl enable docker
 ```
 
-**Firewall:**
+Firewall (no CouchDB port any more):
+
 ```bash
 ufw enable
 ufw allow 22/tcp 80/tcp 443/tcp 51820/udp
 ufw status
 ```
 
-### 2. Deploy on VPS
+### 2. Clone and configure
 
-**Clone/upload project:**
 ```bash
 cd /opt
 git clone <your-repo-url> obsidian-sync
 cd obsidian-sync
 ```
 
-**Create `.env`** (copy from `.env.example`, update values):
-```bash
-cp .env.example .env
-```
+Put the non-secrets in a gitignored `.env` at the repo root:
 
-Edit `.env`:
 ```
-COUCHDB_USER=admin
-COUCHDB_PASSWORD=<strong-password>
-VPS_DOMAIN=your-domain.com  # or keep as 'localhost' if no domain
+MCP_DOMAIN=mcp.your-domain.com
+MCP_RESOURCE_URL=https://mcp.your-domain.com/mcp
 VPS_IP=<your-vps-ip>
 WIREGUARD_PEERS=3
 TZ=UTC
 ```
 
-**If using domain with Caddy (HTTPS):**
-1. Point DNS: `your-domain.com` → VPS_IP
-2. Wait for DNS propagation (5-60 min)
-3. Update Caddyfile or it will auto-update from VPS_DOMAIN env var
+Secrets (`FIREWORKS_API_KEY`, `OBSIDIAN_AUTH_TOKEN`, `MCP_BEARER_TOKEN`) go
+through Doppler or a separate `.env`. The deploy detail lives in
+[`mcp/DEPLOY.md`](mcp/DEPLOY.md).
 
-**Start services:**
+### 3. Bring up the services
+
+Point DNS `mcp.your-domain.com` → `VPS_IP`, then:
+
 ```bash
-docker-compose up -d
-docker-compose ps
+docker compose up -d wireguard          # the VPN, independent of the vault
+docker compose run --rm obsidian-headless ob login   # one-time Sync login
+docker compose up -d obsidian-headless  # starts the pull-only mirror
+docker compose up -d mcp caddy          # MCP server + reverse proxy with TLS
+docker compose ps
 ```
 
-**Verify:**
-```bash
-curl http://localhost:5984  # CouchDB direct
-curl https://your-domain.com  # Via Caddy (if domain set)
-```
+Caddy auto-provisions a certificate on the first request to `MCP_DOMAIN`. The
+full one-time Obsidian Sync setup (`ob sync-setup`, `ob sync-config`) and the
+Claude connector registration are in [`mcp/DEPLOY.md`](mcp/DEPLOY.md).
 
-### 3. CouchDB Initialization
+### 4. WireGuard client setup
 
-After first startup, initialize CouchDB:
-```bash
-docker exec obsidian-couchdb curl -s https://raw.githubusercontent.com/vrtmrz/obsidian-livesync/main/utils/couchdb/couchdb-init.sh | bash
-```
+Get a peer config from the server:
 
-Or manually via web interface (admin credentials from `.env`):
-```
-http://your-vps-ip:5984/_utils/
-```
-
-### 4. Obsidian Client Setup
-
-**Install plugin:**
-1. Obsidian → Settings → Community Plugins → Browse
-2. Search "Self-hosted LiveSync" (by vrtmrz)
-3. Install & enable
-
-**Configure:**
-1. Settings → Self-hosted LiveSync
-2. Server URL: `https://your-domain.com` or `http://your-vps-ip:5984`
-3. Username: `admin`
-4. Password: (from `.env` COUCHDB_PASSWORD)
-5. Test connection
-
-**Sync:**
-- Desktop: Just configure the plugin
-- Mobile: May require VPN access or HTTPS (hence Caddy)
-
-### 5. Wireguard Client Setup (Optional)
-
-Get peer config from server:
 ```bash
 docker exec wireguard cat /config/peer1/peer1.conf
 ```
 
-On client device:
-1. Install Wireguard app
-2. Create new tunnel, paste config content
-3. Activate VPN
-4. Access CouchDB at `http://10.13.13.1:5984` or `https://your-domain.com`
+On the client device: install the WireGuard app, create a tunnel from the config,
+activate it.
 
-## File Structure
+## Ports
 
-```
-.
-├── Dockerfile           # CouchDB + Wireguard tools
-├── docker-compose.yml   # Service orchestration
-├── Caddyfile           # Reverse proxy config
-├── .env                # Secrets (don't commit)
-├── .env.example        # Template
-├── livesync/config/    # CouchDB data persistence
-└── wireguard/config/   # VPN configs & certs
-```
+| Service   | Port  | Protocol | Purpose                           |
+| --------- | ----- | -------- | --------------------------------- |
+| Caddy     | 80    | TCP      | HTTP, redirects to 443            |
+| Caddy     | 443   | TCP      | HTTPS reverse proxy to `mcp:3000` |
+| WireGuard | 51820 | UDP      | VPN tunnel                        |
 
-## Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| "Connection refused" | Check `docker-compose ps`, firewall rules |
-| Caddy cert fails | Verify domain DNS resolves to VPS IP |
-| Wireguard won't connect | Check `docker logs wireguard`, peer config |
-| CouchDB 404 on /_utils | Normal if not initialized, use livesync plugin instead |
+The `mcp` and `obsidian-headless` services publish no host ports. Caddy reaches
+`mcp` on the compose network as `mcp:3000`.
 
 ## Maintenance
 
 ```bash
-# View logs
-docker-compose logs -f couchdb
-docker-compose logs -f caddy
-docker-compose logs -f wireguard
+docker compose logs -f mcp
+docker compose logs -f obsidian-headless
+docker compose logs -f caddy
+docker compose logs -f wireguard
 
-# Stop services
-docker-compose down
-
-# Restart
-docker-compose up -d
-
-# Update images
-docker-compose pull
-docker-compose up -d
+docker compose pull        # update images
+docker compose up -d
+docker compose down        # stop everything
 ```
 
-## Ports
+## Security notes
 
-| Service | Port | Protocol | Purpose |
-|---------|------|----------|---------|
-| Caddy | 80 | TCP | HTTP (redirects to 443) |
-| Caddy | 443 | TCP | HTTPS reverse proxy |
-| CouchDB | 5984 | TCP | Direct access (internal) |
-| Wireguard | 51820 | UDP | VPN tunnel |
-
-## Security Notes
-
-- Never commit `.env` with real credentials
-- Use strong CouchDB password (20+ chars, mixed case)
-- Rotate Wireguard keys periodically
-- Keep Docker images updated: `docker-compose pull`
-- Consider fail2ban on VPS for SSH brute-force protection
-
-## Storage Tier Options
-
-- **2GB / 50GB**: $6/mo (small vault <5GB)
-- **4GB / 80GB**: $12/mo (recommended for most)
-- **8GB / 160GB**: $24/mo (large vault growth)
-
-Can upgrade Vultr instance anytime without downtime.
+- Never commit `.env` with real credentials.
+- The `OBSIDIAN_AUTH_TOKEN` is account-scoped: use a dedicated Obsidian account
+  invited only to the target vault.
+- The `vault_data` mount is read-only for the `mcp` service; it never writes the
+  vault.
+- Rotate WireGuard keys periodically. Consider fail2ban for SSH.
+- Keep Docker images updated.
 
 ## References
 
-- [Obsidian LiveSync Docs](https://github.com/vrtmrz/obsidian-livesync)
-- [CouchDB Admin](http://your-vps-ip:5984/_utils/)
+- [Obsidian Sync](https://obsidian.md/sync)
 - [Caddy Docs](https://caddyserver.com/docs/)
-- [Wireguard](https://www.wireguard.com/)
+- [WireGuard](https://www.wireguard.com/)
+- Consult MCP server operations: [`mcp/DEPLOY.md`](mcp/DEPLOY.md)

@@ -2,3 +2,16 @@
 *.log
 node_modules/
 .env
+
+# MCP server build artifacts
+mcp/dist/
+mcp/node_modules/
+# Vendored vault-query source (staged by mcp/vendor-vault-query.sh for the Docker build)
+mcp/.vault-query-src/
+# Local test stub
+mcp/.env.local
+docker-compose.override.yml
+# Vault project link (absolute paths, per-device)
+.vault.config.json
+# Box-only secret values mounted via docker-compose.secrets.yml (chmod 600 on the box)
+secrets/

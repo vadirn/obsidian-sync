@@ -1,24 +1,4 @@
-version: '3.8'
-
 services:
-  couchdb:
-    build: .
-    container_name: obsidian-couchdb
-    ports:
-      - "5984:5984"
-    volumes:
-      - couchdb_data:/opt/couchdb/data
-    environment:
-      - COUCHDB_USER=${COUCHDB_USER:-admin}
-      - COUCHDB_PASSWORD=${COUCHDB_PASSWORD:-changeme}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5984"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
   wireguard:
     image: linuxserver/wireguard:latest
     container_name: wireguard
@@ -54,15 +34,65 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
     environment:
-      - VPS_DOMAIN=${VPS_DOMAIN:-localhost}
+      - MCP_DOMAIN=${MCP_DOMAIN:-mcp.localhost}
     depends_on:
-      - couchdb
+      - mcp
     restart: unless-stopped
 
+  # --- ADDITIVE: official Obsidian Sync headless pull-only sidecar ---
+  # Lands the vault as plaintext .md files in the shared vault_data volume.
+  obsidian-headless:
+    build:
+      context: ./mcp
+      dockerfile: obsidian-headless.Dockerfile
+    container_name: obsidian-headless
+    environment:
+      - OBSIDIAN_AUTH_TOKEN=${OBSIDIAN_AUTH_TOKEN:-}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - vault_data:/vault
+      - obsidian_config:/config
+    restart: unless-stopped
+
+  # --- ADDITIVE: read-only consult MCP server (vault-query + Fireworks synthesis) ---
+  mcp:
+    build:
+      context: ./mcp
+      dockerfile: Dockerfile
+    container_name: obsidian-mcp
+    environment:
+      - PORT=3000
+      - VAULT_ROOT=/vault
+      - MCP_AUTH_MODE=${MCP_AUTH_MODE:-bearer}
+      - MCP_BEARER_TOKEN=${MCP_BEARER_TOKEN:-}
+      - MCP_AUTH_PASSWORD=${MCP_AUTH_PASSWORD:-}
+      - MCP_RESOURCE_URL=${MCP_RESOURCE_URL:-https://mcp.localhost/mcp}
+      - MCP_OAUTH_ISSUER=${MCP_OAUTH_ISSUER:-}
+      - OAUTH_STORE=${OAUTH_STORE:-/data/oauth.json}
+      - FIREWORKS_API_KEY=${FIREWORKS_API_KEY:-}
+      - FIREWORKS_MODEL=${FIREWORKS_MODEL:-accounts/fireworks/models/glm-5p2}
+      - FIREWORKS_MAX_TOKENS=${FIREWORKS_MAX_TOKENS:-1024}
+    volumes:
+      - vault_data:/vault:ro # read-only: the MCP server never writes the vault
+      - oauth_data:/data # OAuth clients + tokens (DCR registrations, live grants)
+    depends_on:
+      - obsidian-headless
+    restart: unless-stopped
+    # Hard-cap memory and CPU so a consult flood throttles the mcp container
+    # instead of OOM-killing the 2GB/1-core box and taking WireGuard down with it.
+    # Top-level keys (compose v2 on the box), not the swarm-only deploy.resources form.
+    mem_limit: 1g
+    cpus: 1.0
+    # no published port: Caddy reaches it on the compose network as mcp:3000
+
 volumes:
-  couchdb_data:
-    driver: local
   wireguard_config:
     driver: local
   caddy_data:
+    driver: local
+  vault_data:
+    driver: local
+  obsidian_config:
+    driver: local
+  oauth_data:
     driver: local
