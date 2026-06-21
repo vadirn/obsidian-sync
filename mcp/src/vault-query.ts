@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { join as joinPath } from "node:path";
 
 const BIN = process.env.VAULT_QUERY_BIN ?? "vault-query";
 const VAULT_ROOT = process.env.VAULT_ROOT ?? "/vault";
@@ -253,7 +254,11 @@ export async function resolve(slug: string): Promise<string> {
 
 /** links: outgoing wikilinks from a file. */
 export async function links(path: string): Promise<string> {
-  const { stdout } = await run(["links", path, "--vault-root", VAULT_ROOT]);
+  // Unlike read/backlinks, `links` resolves its FILE argument against the process
+  // cwd rather than --vault-root, so a vault-relative path fails when the server
+  // runs outside the vault. Join VAULT_ROOT to get an absolute path the binary
+  // accepts. The caller already validated `path` is vault-relative (assertVaultPath).
+  const { stdout } = await run(["links", joinPath(VAULT_ROOT, path), "--vault-root", VAULT_ROOT]);
   return stdout;
 }
 
