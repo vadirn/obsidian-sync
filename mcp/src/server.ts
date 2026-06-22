@@ -10,23 +10,25 @@ import {
 } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { runConsult } from "./consult-tool.js";
+import { registerVaultTools } from "./vault-tools.js";
 import { synthesisEnabled } from "./synthesis.js";
 import { resolveSecret } from "./secrets.js";
-import { rateLimit, Semaphore, ConcurrencyLimitError } from "./limits.js";
+import { rateLimit, Semaphore } from "./limits.js";
 import { oauthProvider, basicAuthGate } from "./oauth.js";
+import { RESOURCE, ORIGIN, STATIC_TOKEN } from "./config.js";
+import { jsonRpcError } from "./rpc.js";
+import { handle } from "./tool-result.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
-const RESOURCE = process.env.MCP_RESOURCE_URL ?? "https://localhost/mcp";
 const AUTH_MODE = (process.env.MCP_AUTH_MODE ?? "bearer") as "none" | "bearer" | "oauth";
-const STATIC_TOKEN = resolveSecret("MCP_BEARER_TOKEN");
-const ORIGIN = RESOURCE.replace(/\/mcp$/, "");
 
 // Flood guards (see limits.ts). Defaults sized for the 1-core/2GB box: claude.ai
 // egress NATs to a few IPs and one consult is several HTTP requests, so the per-IP
 // limit is generous; the concurrency cap is the real OOM backstop.
 const RATE_LIMIT = Number(process.env.MCP_RATE_LIMIT ?? 30); // requests/min/IP
-const MAX_CONCURRENCY = Number(process.env.MCP_MAX_CONCURRENCY ?? 2); // simultaneous consults
-const consultSemaphore = new Semaphore(MAX_CONCURRENCY);
+const MAX_CONCURRENCY = Number(process.env.MCP_MAX_CONCURRENCY ?? 2); // simultaneous index builds
+// Guards both consult and search: each rebuilds the in-memory tantivy index per call.
+const indexSemaphore = new Semaphore(MAX_CONCURRENCY);
 
 if (AUTH_MODE === "oauth" && !resolveSecret("MCP_AUTH_PASSWORD")) {
   // The /authorize gate is the only thing standing between the public internet
@@ -59,23 +61,16 @@ function buildServer(): McpServer {
           .describe("Include superseded entries and checkpoints in scope."),
       },
     },
-    async ({ query, types, include_superseded }) => {
-      try {
-        // Semaphore caps simultaneous index builds; past the cap it rejects fast.
-        const result = await consultSemaphore.run(() =>
-          runConsult(query, { types, includeSuperseded: include_superseded }),
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      } catch (e) {
-        // Busy → a distinct retryable message; exit 1/2 from vault-query → tool error.
-        const text =
-          e instanceof ConcurrencyLimitError
-            ? (e as Error).message
-            : `vault-query error: ${(e as Error).message}`;
-        return { isError: true, content: [{ type: "text", text }] };
-      }
-    },
+    async ({ query, types, include_superseded }) =>
+      // Semaphore caps simultaneous index builds; past the cap it rejects fast.
+      // Busy → a distinct retryable message; exit 1/2 from vault-query → tool error.
+      handle(() =>
+        indexSemaphore
+          .run(() => runConsult(query, { types, includeSuperseded: include_superseded }))
+          .then((r) => JSON.stringify(r)),
+      ),
   );
+  registerVaultTools(server, indexSemaphore);
   return server;
 }
 
@@ -123,13 +118,11 @@ function authGuard(req: Request, res: Response, next: NextFunction): void {
     return next();
   }
   // oauth mode never reaches here: those routes use requireBearerAuth (see mcpAuth).
-  res
-    .status(401)
-    .set(
-      "WWW-Authenticate",
-      `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource"`,
-    )
-    .json({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized" }, id: null });
+  res.set(
+    "WWW-Authenticate",
+    `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource"`,
+  );
+  jsonRpcError(res, 401, -32001, "unauthorized");
 }
 
 // In oauth mode the /mcp routes validate OAuth-issued (or static) tokens via the
@@ -162,11 +155,7 @@ app.post("/mcp", mcpRateLimit, mcpAuth, async (req: Request, res: Response) => {
     };
     await buildServer().connect(transport);
   } else if (!transport) {
-    res.status(400).json({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: "Bad Request: no valid session ID" },
-      id: null,
-    });
+    jsonRpcError(res, 400, -32000, "Bad Request: no valid session ID");
     return;
   }
 

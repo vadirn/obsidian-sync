@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
+import { jsonRpcError } from "./rpc.js";
 
 // Flood guards for a 1-core/2GB box. Each `consult` runs vault-query, which
 // rebuilds an in-memory tantivy index per call (no daemon), so an unbounded
@@ -52,14 +53,8 @@ export function rateLimit(opts: {
     }
     if (b.tokens < 1) {
       const retryS = Math.ceil((1 - b.tokens) / refillPerMs / 1000);
-      res
-        .status(429)
-        .set("Retry-After", String(retryS))
-        .json({
-          jsonrpc: "2.0",
-          error: { code: -32029, message: "rate limit exceeded" },
-          id: null,
-        });
+      res.set("Retry-After", String(retryS));
+      jsonRpcError(res, 429, -32029, "rate limit exceeded");
       return;
     }
     b.tokens -= 1;

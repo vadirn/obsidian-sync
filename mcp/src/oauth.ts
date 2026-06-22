@@ -4,7 +4,7 @@
 // mcpAuthRouter. The only human-in-the-loop step is /authorize, which is gated by
 // HTTP Basic against MCP_AUTH_PASSWORD; every other endpoint is machine-to-machine
 // and protected by PKCE / client auth handled inside the SDK handlers.
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Request, Response, NextFunction } from "express";
@@ -21,10 +21,9 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { resolveSecret } from "./secrets.js";
+import { RESOURCE, STATIC_TOKEN } from "./config.js";
 
-const RESOURCE = process.env.MCP_RESOURCE_URL ?? "https://localhost/mcp";
 const STORE_PATH = process.env.OAUTH_STORE ?? "/data/oauth.json";
-const STATIC_TOKEN = resolveSecret("MCP_BEARER_TOKEN");
 const AUTH_PASSWORD = resolveSecret("MCP_AUTH_PASSWORD");
 const ACCESS_TTL = 60 * 60; // 1 hour
 const REFRESH_TTL = 30 * 24 * 60 * 60; // 30 days
@@ -72,8 +71,20 @@ type CodeRecord = {
 };
 const codes = new Map<string, CodeRecord>();
 
+/** Opaque random token / code as a hex string of `bytes` entropy. */
+const opaqueToken = (bytes: number): string => randomBytes(bytes).toString("hex");
+
+/** Look up an authorization code and assert it is unexpired and bound to `client`. */
+function getValidCode(client: OAuthClientInformationFull, authorizationCode: string): CodeRecord {
+  const rec = codes.get(authorizationCode);
+  if (!rec || rec.clientId !== client.client_id || rec.expiresAt < Date.now()) {
+    throw new InvalidTokenError("invalid or expired authorization code");
+  }
+  return rec;
+}
+
 function issueToken(bucket: "access" | "refresh", rec: Omit<TokenRecord, "expiresAt">): string {
-  const token = randomBytes(32).toString("hex");
+  const token = opaqueToken(32);
   const ttl = bucket === "access" ? ACCESS_TTL : REFRESH_TTL;
   store[bucket][token] = { ...rec, expiresAt: nowSec() + ttl };
   return token;
@@ -112,7 +123,7 @@ export const oauthProvider: OAuthServerProvider = {
   async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response) {
     // The Basic-auth gate on /authorize has already authenticated the user, so a
     // valid request here is consent: mint a code bound to this client + PKCE.
-    const code = randomBytes(24).toString("hex");
+    const code = opaqueToken(24);
     codes.set(code, {
       clientId: client.client_id,
       codeChallenge: params.codeChallenge,
@@ -131,11 +142,7 @@ export const oauthProvider: OAuthServerProvider = {
     client: OAuthClientInformationFull,
     authorizationCode: string,
   ) {
-    const rec = codes.get(authorizationCode);
-    if (!rec || rec.clientId !== client.client_id || rec.expiresAt < Date.now()) {
-      throw new InvalidTokenError("invalid or expired authorization code");
-    }
-    return rec.codeChallenge;
+    return getValidCode(client, authorizationCode).codeChallenge;
   },
 
   async exchangeAuthorizationCode(
@@ -145,10 +152,7 @@ export const oauthProvider: OAuthServerProvider = {
     redirectUri?: string,
     resource?: URL,
   ) {
-    const rec = codes.get(authorizationCode);
-    if (!rec || rec.clientId !== client.client_id || rec.expiresAt < Date.now()) {
-      throw new InvalidTokenError("invalid or expired authorization code");
-    }
+    const rec = getValidCode(client, authorizationCode);
     if (redirectUri && redirectUri !== rec.redirectUri) {
       throw new InvalidTokenError("redirect_uri mismatch");
     }
