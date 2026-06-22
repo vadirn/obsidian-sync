@@ -13,10 +13,11 @@ import { runConsult } from "./consult-tool.js";
 import { registerVaultTools } from "./vault-tools.js";
 import { synthesisEnabled } from "./synthesis.js";
 import { resolveSecret } from "./secrets.js";
-import { rateLimit, Semaphore, ConcurrencyLimitError } from "./limits.js";
+import { rateLimit, Semaphore } from "./limits.js";
 import { oauthProvider, basicAuthGate } from "./oauth.js";
 import { RESOURCE, ORIGIN, STATIC_TOKEN } from "./config.js";
 import { jsonRpcError } from "./rpc.js";
+import { handle } from "./tool-result.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const AUTH_MODE = (process.env.MCP_AUTH_MODE ?? "bearer") as "none" | "bearer" | "oauth";
@@ -60,22 +61,14 @@ function buildServer(): McpServer {
           .describe("Include superseded entries and checkpoints in scope."),
       },
     },
-    async ({ query, types, include_superseded }) => {
-      try {
-        // Semaphore caps simultaneous index builds; past the cap it rejects fast.
-        const result = await indexSemaphore.run(() =>
-          runConsult(query, { types, includeSuperseded: include_superseded }),
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      } catch (e) {
-        // Busy → a distinct retryable message; exit 1/2 from vault-query → tool error.
-        const text =
-          e instanceof ConcurrencyLimitError
-            ? (e as Error).message
-            : `vault-query error: ${(e as Error).message}`;
-        return { isError: true, content: [{ type: "text", text }] };
-      }
-    },
+    async ({ query, types, include_superseded }) =>
+      // Semaphore caps simultaneous index builds; past the cap it rejects fast.
+      // Busy → a distinct retryable message; exit 1/2 from vault-query → tool error.
+      handle(() =>
+        indexSemaphore
+          .run(() => runConsult(query, { types, includeSuperseded: include_superseded }))
+          .then((r) => JSON.stringify(r)),
+      ),
   );
   registerVaultTools(server, indexSemaphore);
   return server;

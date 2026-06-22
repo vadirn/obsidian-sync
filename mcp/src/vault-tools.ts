@@ -16,7 +16,8 @@ import {
   listFolder,
   VaultQueryError,
 } from "./vault-query.js";
-import { Semaphore, ConcurrencyLimitError } from "./limits.js";
+import { Semaphore } from "./limits.js";
+import { handle } from "./tool-result.js";
 
 // Listing/get output can be large; cap text pass-through with a visible marker
 // so a runaway dump can't blow the agent's context window.
@@ -39,24 +40,6 @@ function assertVaultPath(p: string): void {
   const segments = p.split(/[/\\]/);
   if (segments.some((seg) => seg === "..")) {
     throw new VaultQueryError(`path must not contain ".." segments: ${p}`, 2);
-  }
-}
-
-type ToolResult = {
-  content: { type: "text"; text: string }[];
-  isError?: boolean;
-};
-
-/** Run a handler body, mapping VaultQueryError/busy to the shared tool-error shape. */
-async function handle(fn: () => Promise<string>): Promise<ToolResult> {
-  try {
-    return { content: [{ type: "text", text: await fn() }] };
-  } catch (e) {
-    const text =
-      e instanceof ConcurrencyLimitError
-        ? (e as Error).message
-        : `vault-query error: ${(e as Error).message}`;
-    return { isError: true, content: [{ type: "text", text }] };
   }
 }
 
@@ -92,11 +75,12 @@ export function registerVaultTools(server: McpServer, indexSemaphore: Semaphore)
     },
     async ({ query, limit, regex, types, path, no_superseded }) =>
       // search rebuilds the tantivy index like consult, so it shares the OOM backstop.
-      handle(() =>
-        indexSemaphore
+      handle(() => {
+        if (path) assertVaultPath(path);
+        return indexSemaphore
           .run(() => search({ query, limit, regex, types, path, noSuperseded: no_superseded }))
-          .then((r) => JSON.stringify(r)),
-      ),
+          .then((r) => JSON.stringify(r));
+      }),
   );
 
   server.registerTool(
