@@ -15,3 +15,6 @@ docker-compose.override.yml
 .vault.config.json
 # Box-only secret values mounted via docker-compose.secrets.yml (chmod 600 on the box)
 secrets/
+
+# Scraped vendor docs (Firecrawl research scratch)
+.firecrawl/
